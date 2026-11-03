@@ -24,8 +24,9 @@ import tempfile
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ui_theme import PALETTES, DiskOverview, apply_modern_theme, configure_typography
+from app_storage.view import AppStoragePage
 
-APP_VERSION = "1.7.10"
+APP_VERSION = "1.8.0"
 
 # ---------------- 工具函数 ----------------
 
@@ -296,10 +297,16 @@ class ScannerApp:
         self.appearance_btn.place(relx=1, x=-12, y=20, anchor="e")
         self.browse_tab = ttk.Frame(self.notebook)
         self.scan_tab = ttk.Frame(self.notebook, style="Card.TFrame")
+        self.cleanup_tab = ttk.Frame(self.notebook, style="Card.TFrame")
+        self.search_tab = ttk.Frame(self.notebook, style="Card.TFrame")
         self.notebook.add(self.browse_tab, text="文件浏览")
         self.notebook.add(self.scan_tab, text="大文件扫描")
+        self.notebook.add(self.cleanup_tab, text="磁盘清理")
+        self.notebook.add(self.search_tab, text="快速检索")
         self.notebook.select(self.browse_tab)
         self.notebook.enable_traversal()
+        self.app_storage_page = AppStoragePage(self.cleanup_tab, self.notebook, fmt_size,
+                                               open_in_finder, self.browse_app_storage_path)
         workspace = ttk.PanedWindow(self.browse_tab, orient="horizontal")
         self.workspace = workspace
         workspace.pack(fill="both", expand=True, pady=(10, 0))
@@ -486,6 +493,10 @@ class ScannerApp:
         self.root.after(120, self._poll)
 
     # ---------- 外观模式 ----------
+    def browse_app_storage_path(self, path):
+        self.notebook.select(self.browse_tab)
+        self.navigate(path)
+
     def toggle_theme(self):
         self.mode = "dark" if self.mode == "light" else "light"
         self.apply_theme(self.mode)
