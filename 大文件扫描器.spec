@@ -57,5 +57,5 @@ app = BUNDLE(
     name='大文件扫描器.app',
     icon=None,
     bundle_identifier='local.safediskscanner.app',
-    info_plist={'CFBundleShortVersionString': '1.6.0', 'CFBundleVersion': '1.6.0'},
+    info_plist={'CFBundleShortVersionString': '1.7.10', 'CFBundleVersion': '1.7.10'},
 )

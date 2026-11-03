@@ -31,6 +31,9 @@ def make_app():
     app._file_order = []
     app._size_sort_dirty = False
     app.size_sort_descending = True
+    app.sort_column = 'size'
+    app.mtime_sort_descending = True
+    app._file_mtimes = {}
     app.excluded_file_types = set()
     app._type_filter_popup = None
     app.filter_summary_var = Mock()

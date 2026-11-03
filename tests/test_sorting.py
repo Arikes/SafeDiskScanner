@@ -39,7 +39,6 @@ class SortingTests(unittest.TestCase):
     def app(self, descending=True):
         app = make_app()
         app.size_sort_descending = descending
-        app.has_parent = True; app.parent_path = '/parent'
         app.sort_hint_var = Mock(); app.file_operation_status = Mock()
         app.flist = Table()
         app.file_items = [(10, True, 'small-dir', '/small-dir', ''),
@@ -51,10 +50,10 @@ class SortingTests(unittest.TestCase):
         return [app.flist.rows[row][0] for row in app.flist.order]
     def test_descending_sorts_files_and_folders_together_unknown_last(self):
         app = self.app(); app._render_list()
-        self.assertEqual(self.names(app), ['..', 'large-file', 'medium-file', 'small-dir', 'pending'])
-    def test_ascending_keeps_parent_first_unknown_last(self):
+        self.assertEqual(self.names(app), ['large-file', 'medium-file', 'small-dir', 'pending'])
+    def test_ascending_sorts_only_real_items_unknown_last(self):
         app = self.app(False); app._render_list()
-        self.assertEqual(self.names(app), ['..', 'small-dir', 'medium-file', 'large-file', 'pending'])
+        self.assertEqual(self.names(app), ['small-dir', 'medium-file', 'large-file', 'pending'])
     def test_click_toggles_and_saves_without_recreating_or_losing_selected_rows(self):
         app = self.app(); app._render_list()
         selected = app._file_row_ids['/medium-file']; app.flist.selected = (selected,)
@@ -65,19 +64,19 @@ class SortingTests(unittest.TestCase):
         save.assert_called_once_with(False)
         self.assertEqual(set(app.flist.rows), original_ids)
         self.assertEqual(app.flist.selected, (selected,))
-        self.assertEqual(self.names(app)[1:3], ['small-dir', 'medium-file'])
+        self.assertEqual(self.names(app)[:2], ['small-dir', 'medium-file'])
         self.assertIn('↑', app.flist.headers['size']['text'])
     def test_background_size_result_reorders_existing_rows(self):
         app = self.app(); app._render_list()
         app._update_row_size('/pending', 300)
         app._reorder_file_rows()
-        self.assertEqual(self.names(app), ['..', 'pending', 'large-file', 'medium-file', 'small-dir'])
+        self.assertEqual(self.names(app), ['pending', 'large-file', 'medium-file', 'small-dir'])
         self.assertEqual(next(x[0] for x in app.file_items if x[3] == '/pending'), 300)
     def test_new_directory_uses_existing_choice(self):
         app = self.app(False); app._render_list()
         app.file_items = [(999, False, 'large', '/large', ''), (1, True, 'small', '/small', '')]
         app._render_list()
-        self.assertEqual(self.names(app), ['..', 'small', 'large'])
+        self.assertEqual(self.names(app), ['small', 'large'])
     def test_saved_direction_survives_reload_and_preserves_other_settings(self):
         with tempfile.TemporaryDirectory() as d:
             path = pathlib.Path(d) / 'config' / 'settings.json'

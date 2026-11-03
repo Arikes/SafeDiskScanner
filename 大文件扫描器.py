@@ -23,6 +23,9 @@ import json
 import tempfile
 import tkinter as tk
 from tkinter import ttk, messagebox
+from ui_theme import PALETTES, DiskOverview, apply_modern_theme, configure_typography
+
+APP_VERSION = "1.7.10"
 
 # ---------------- 工具函数 ----------------
 
@@ -112,7 +115,26 @@ def _save_preferences(updates, settings_path=None):
 
 
 def save_sort_direction(descending, settings_path=None):
-    return _save_preferences({"size_sort_descending": bool(descending)}, settings_path)
+    return _save_preferences({"browser_sort_column": "size", "size_sort_descending": bool(descending)}, settings_path)
+
+
+def load_browser_sort(settings_path=None):
+    """旧配置默认继续按大小排序；修改时间首次使用降序。"""
+    try:
+        with open(settings_path or sort_settings_path(), encoding="utf-8") as stream:
+            settings = json.load(stream)
+        if not isinstance(settings, dict):
+            return "size", True
+        column = settings.get("browser_sort_column", "size")
+        descending = settings.get("mtime_sort_descending", True)
+        return (column if column in ("size", "mtime") else "size",
+                descending if type(descending) is bool else True)
+    except (OSError, ValueError):
+        return "size", True
+
+
+def save_mtime_sort_direction(descending, settings_path=None):
+    return _save_preferences({"browser_sort_column": "mtime", "mtime_sort_descending": bool(descending)}, settings_path)
 
 
 def load_type_filter(settings_path=None):
@@ -131,6 +153,20 @@ def load_type_filter(settings_path=None):
 
 def save_type_filter(excluded_types, settings_path=None):
     return _save_preferences({"excluded_file_types": sorted(excluded_types)}, settings_path)
+
+
+def load_sidebar_collapsed(settings_path=None):
+    try:
+        with open(settings_path or sort_settings_path(), encoding="utf-8") as stream:
+            settings = json.load(stream)
+        value = settings.get("sidebar_collapsed", False) if isinstance(settings, dict) else False
+        return value if type(value) is bool else False
+    except (OSError, ValueError):
+        return False
+
+
+def save_sidebar_collapsed(collapsed, settings_path=None):
+    return _save_preferences({"sidebar_collapsed": bool(collapsed)}, settings_path)
 
 
 def browser_item_type(item):
@@ -176,37 +212,6 @@ def trash_items(paths):
 
 # ---------------- 双模式(深色/浅色)配色 ----------------
 
-PALETTES = {
-    "light": {
-        "win_bg":       "#f2f5fa",
-        "muted": "#58677d", "border": "#dce3ed", "accent": "#2563eb", "accent_active": "#1d4ed8",
-        "tree_bg":      "#ffffff",
-        "tree_fg":      "#1a1a1a",
-        "heading_bg":   "#edf2f8",
-        "dir":          "#0a7a3a",
-        "file":         "#1a1a1a",
-        "selected_bg":  "#2f6fd6",
-        "selected_fg":  "#ffffff",
-        "btn_bg":       "#e7e7e7",
-        "btn_active":   "#d4d4d4",
-        "up":           "#1a66cc",
-    },
-    "dark": {
-        "win_bg":       "#151b26",
-        "muted": "#a6b3c6", "border": "#354156", "accent": "#3978ef", "accent_active": "#2867db",
-        "tree_bg":      "#202938",
-        "tree_fg":      "#e6e6e6",
-        "heading_bg":   "#293449",
-        "dir":          "#7ee2a0",
-        "file":         "#e6e6e6",
-        "selected_bg":  "#2f6fd6",
-        "selected_fg":  "#ffffff",
-        "btn_bg":       "#3a3a3a",
-        "btn_active":   "#4a4a4a",
-        "up":           "#6cb0ff",
-    },
-}
-
 def detect_system_mode():
     """检测 macOS 系统外观：深色为 dark，浅色为 light"""
     try:
@@ -224,9 +229,10 @@ def detect_system_mode():
 class ScannerApp:
     def __init__(self, root):
         self.root = root
-        root.title("大文件扫描器 - 磁盘空间管理")
+        root.title("大文件扫描器 v%s - 磁盘空间管理" % APP_VERSION)
         root.geometry("1180x820")
         root.minsize(900, 720)
+        configure_typography(root)
 
         # 外观模式：自动跟随系统(深色/浅色)，也可手动切换。
         # 使用 clam 主题 + 显式调色板，确保两种模式下文字都清晰可读。
@@ -251,8 +257,13 @@ class ScannerApp:
         self._size_cancel = threading.Event()         # 导航代次，取消离开目录后的旧计算
         self.dir_size_pending = set()                  # 正在计算大小的目录
         self.file_items = []                           # 当前列表的原始数据 (size, is_dir, name, path)
+        self._browser_read_error = None
         self.size_sort_descending = load_sort_direction()
+        self.sort_column, self.mtime_sort_descending = load_browser_sort()
+        self._file_mtimes = {}
         self.excluded_file_types = load_type_filter()
+        self.sidebar_collapsed = load_sidebar_collapsed()
+        self._sidebar_width = 210
         self._type_filter_popup = None
         self._file_item_indexes = {}
         self._file_order = []
@@ -264,41 +275,25 @@ class ScannerApp:
         self.scan_result_q = queue.Queue()             # 扫描进度/结果消息
 
         # 顶部概览与工作区；只重排控件，事件仍沿用原有处理方法。
-        shell = ttk.Frame(root, padding=(16, 12, 16, 8))
+        shell = ttk.Frame(root, padding=(20, 16, 20, 10))
         shell.pack(fill="both", expand=True)
         shell.columnconfigure(0, weight=1)
-        shell.rowconfigure(2, weight=1)
+        shell.rowconfigure(1, weight=1)
 
-        header = ttk.Frame(shell)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(header, text="大文件扫描器", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="磁盘空间，一目了然", style="Muted.TLabel").pack(side="left", padx=14)
-        self.appearance_btn = ttk.Button(header, command=self.toggle_theme)
-        self.appearance_btn.pack(side="right")
-
-        overview = ttk.Frame(shell, style="Card.TFrame", padding=10)
-        overview.grid(row=1, column=0, sticky="ew", pady=(0, 12))
-        overview.columnconfigure((0, 1, 2), weight=1, uniform="metrics")
         self.disk_var = tk.StringVar(value="计算中…")
         self.disk_total_var = tk.StringVar(value="—")
         self.disk_used_var = tk.StringVar(value="—")
         self.disk_free_var = tk.StringVar(value="—")
-        for col, (label, var) in enumerate((("磁盘总容量", self.disk_total_var),
-                                          ("已使用空间", self.disk_used_var),
-                                          ("剩余可用空间", self.disk_free_var))):
-            metric = ttk.Frame(overview, style="Card.TFrame")
-            metric.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 20, 0))
-            ttk.Label(metric, text=label, style="CardMuted.TLabel").pack(anchor="w")
-            ttk.Label(metric, textvariable=var, style="Metric.TLabel").pack(anchor="w", pady=(2, 0))
-        usage = ttk.Frame(overview, style="Card.TFrame")
-        usage.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        self.disk_bar = ttk.Progressbar(usage, maximum=100, style="Disk.Horizontal.TProgressbar")
-        self.disk_bar.pack(side="left", fill="x", expand=True, padx=(0, 16))
-        ttk.Label(usage, textvariable=self.disk_var, style="CardMuted.TLabel").pack(side="left")
-        ttk.Button(usage, text="刷新磁盘", command=self.refresh_disk, style="Small.TButton").pack(side="right", padx=(12, 0))
+        self.disk_overview = DiskOverview(
+            shell, (("总容量", self.disk_total_var), ("已使用空间", self.disk_used_var),
+                    ("剩余可用空间", self.disk_free_var)),
+            self.disk_var, self.refresh_disk, self.mode)
+        self.disk_overview.grid(row=0, column=0, sticky="ew", pady=(0, 12))
 
         self.notebook = ttk.Notebook(shell, style="Workspace.TNotebook")
-        self.notebook.grid(row=2, column=0, sticky="nsew")
+        self.notebook.grid(row=1, column=0, sticky="nsew")
+        self.appearance_btn = ttk.Button(self.notebook, command=self.toggle_theme, style="Header.TButton")
+        self.appearance_btn.place(relx=1, x=-12, y=20, anchor="e")
         self.browse_tab = ttk.Frame(self.notebook)
         self.scan_tab = ttk.Frame(self.notebook, style="Card.TFrame")
         self.notebook.add(self.browse_tab, text="文件浏览")
@@ -306,19 +301,26 @@ class ScannerApp:
         self.notebook.select(self.browse_tab)
         self.notebook.enable_traversal()
         workspace = ttk.PanedWindow(self.browse_tab, orient="horizontal")
+        self.workspace = workspace
         workspace.pack(fill="both", expand=True, pady=(10, 0))
-        left = ttk.Frame(workspace, style="Card.TFrame", padding=12, width=210)
-        workspace.add(left, weight=0)
+        left = ttk.Frame(workspace, style="Sidebar.TFrame", padding=14, width=210)
+        self.sidebar = left
+        if not self.sidebar_collapsed:
+            workspace.add(left, weight=0)
         left.columnconfigure(0, weight=1)
         left.rowconfigure(3, weight=1)
-        ttk.Label(left, text="目录导航", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 10))
-        quick = ttk.Frame(left, style="Card.TFrame")
+        sidebar_head = ttk.Frame(left, style="Sidebar.TFrame")
+        sidebar_head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(sidebar_head, text="位置", style="SidebarTitle.TLabel").pack(side="left")
+        self.sidebar_collapse_button = ttk.Button(sidebar_head, text="收起", style="Nav.TButton", command=self.toggle_sidebar)
+        self.sidebar_collapse_button.pack(side="right")
+        quick = ttk.Frame(left, style="Sidebar.TFrame")
         quick.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         quick.columnconfigure((0, 1), weight=1)
-        ttk.Button(quick, text="主目录", command=lambda: self.navigate(os.path.expanduser("~")), style="Small.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ttk.Button(quick, text="根目录 /", command=lambda: self.navigate("/"), style="Small.TButton").grid(row=0, column=1, sticky="ew")
-        ttk.Label(left, text="双击目录浏览内容", style="CardMuted.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 8))
-        tree_area = ttk.Frame(left, style="Card.TFrame")
+        ttk.Button(quick, text="主目录", command=lambda: self.navigate(os.path.expanduser("~")), style="Nav.TButton").grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(quick, text="根目录 /", command=lambda: self.navigate("/"), style="Nav.TButton").grid(row=0, column=1, sticky="ew")
+        ttk.Label(left, text="双击目录以浏览", style="SidebarMuted.TLabel").grid(row=2, column=0, sticky="w", pady=(0, 8))
+        tree_area = ttk.Frame(left, style="Sidebar.TFrame")
         tree_area.grid(row=3, column=0, sticky="nsew")
         tree_area.columnconfigure(0, weight=1)
         tree_area.rowconfigure(0, weight=1)
@@ -334,16 +336,20 @@ class ScannerApp:
         self.tree.bind("<<TreeviewOpen>>", self.on_tree_open)
         self.tree.bind("<Double-1>", self.on_tree_dbl)
 
-        browse = ttk.Frame(workspace, style="Card.TFrame", padding=12)
+        browse = ttk.Frame(workspace, style="Card.TFrame", padding=(16, 14))
         workspace.add(browse, weight=1)
         browse.columnconfigure(0, weight=1)
         browse.rowconfigure(3, weight=1)
         head = ttk.Frame(browse, style="Card.TFrame")
         head.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(head, text="文件浏览", style="Section.TLabel").pack(side="left")
+        self.sidebar_expand_button = ttk.Button(head, text="展开目录树", style="SoftAccent.TButton", command=self.toggle_sidebar)
+        if self.sidebar_collapsed:
+            self.sidebar_expand_button.pack(side="left", padx=(0, 12))
+        self.browser_heading = ttk.Label(head, text="当前目录", style="Section.TLabel")
+        self.browser_heading.pack(side="left")
         self.sort_hint_var = tk.StringVar()
         ttk.Label(head, textvariable=self.sort_hint_var, style="CardMuted.TLabel").pack(side="left", padx=10)
-        ttk.Button(head, text="刷新列表", command=lambda: self.navigate(self.current_path), style="Small.TButton").pack(side="right")
+        ttk.Button(head, text="刷新列表", command=lambda: self.navigate(self.current_path), style="Ghost.TButton").pack(side="right")
         ttk.Checkbutton(head, text="显示隐藏文件", variable=self.show_hidden, command=self.on_show_hidden, style="Card.TCheckbutton").pack(side="right", padx=12)
         path_frame = ttk.Frame(browse, style="Card.TFrame")
         path_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -353,7 +359,7 @@ class ScannerApp:
         self.path_entry = ttk.Entry(path_frame, textvariable=self.path_var, width=20)
         self.path_entry.grid(row=0, column=1, sticky="ew")
         self.path_entry.bind("<Return>", lambda e: self.navigate(self.path_var.get()))
-        ttk.Button(path_frame, text="转到", command=lambda: self.navigate(self.path_var.get()), style="Small.TButton").grid(row=0, column=2, padx=(8, 0))
+        ttk.Button(path_frame, text="转到", command=lambda: self.navigate(self.path_var.get()), style="SoftAccent.TButton").grid(row=0, column=2, padx=(8, 0))
         self._populate_tree()
 
         filter_bar = ttk.Frame(browse, style="Card.TFrame")
@@ -361,8 +367,8 @@ class ScannerApp:
         self.filter_summary_var = tk.StringVar()
         summary = ttk.Label(filter_bar, textvariable=self.filter_summary_var, style="CardMuted.TLabel", wraplength=400)
         summary.pack(side="left", fill="x", expand=True)
-        ttk.Button(filter_bar, text="全部展示", command=self.reset_type_filter, style="Small.TButton").pack(side="right", padx=(8, 0))
-        ttk.Button(filter_bar, text="筛选类型…", command=self.open_type_filter, style="Small.TButton").pack(side="right", padx=(8, 0))
+        ttk.Button(filter_bar, text="全部展示", command=self.reset_type_filter, style="Ghost.TButton").pack(side="right", padx=(8, 0))
+        ttk.Button(filter_bar, text="筛选类型…", command=self.open_type_filter, style="SoftAccent.TButton").pack(side="right", padx=(8, 0))
         filter_bar.bind("<Configure>", lambda e: summary.configure(wraplength=max(100, e.width - 220)))
         files_area = ttk.Frame(browse, style="Card.TFrame")
         files_area.grid(row=3, column=0, sticky="nsew")
@@ -376,8 +382,9 @@ class ScannerApp:
             self.flist.heading(name, text=title, anchor=anchor)
             self.flist.column(name, width=width, minwidth=width if not stretch else 170, anchor=anchor, stretch=stretch)
         self.flist.heading("size", command=self.toggle_size_sort)
+        self.flist.heading("mtime", command=self.toggle_mtime_sort)
         self.flist.heading("type", command=self.open_type_filter)
-        self._update_size_sort_header()
+        self._update_sort_headers()
         self._update_type_filter_header()
         self.flist.grid(row=0, column=0, sticky="nsew")
         fsv = ttk.Scrollbar(files_area, orient="vertical", command=self.flist.yview)
@@ -386,6 +393,7 @@ class ScannerApp:
         fsx.grid(row=1, column=0, sticky="ew")
         self.flist.configure(yscrollcommand=fsv.set, xscrollcommand=fsx.set)
         self.flist.bind("<Double-1>", self.on_flist_dbl)
+        self.browser_empty_label = ttk.Label(self.flist, style="Empty.TLabel", justify="center")
 
         scan = ttk.Frame(self.scan_tab, style="Card.TFrame", padding=16)
         scan.pack(fill="both", expand=True)
@@ -451,6 +459,13 @@ class ScannerApp:
         self.res.bind("<Double-1>", self.on_res_dbl)
         self.res.bind("<Button-2>", self.on_res_rmb)
         self.res.bind("<Button-3>", self.on_res_rmb)
+        for table in (self.flist, self.res):
+            table.bind("<<SelectAll>>", self.on_list_select_all)
+        for sequence in ("<<SelectAll>>", "<Command-a>", "<Command-A>"):
+            root.bind(sequence, self.on_list_select_all)
+        self.results_empty_label = ttk.Label(self.res, style="Empty.TLabel", justify="center")
+        self.scan_status.trace_add("write", lambda *_: self.root.after_idle(self._sync_results_empty))
+        self._sync_results_empty()
 
         self._ctx_menu = tk.Menu(root, tearoff=0)
         self.tree.bind("<Button-2>", self.on_tree_rmb)
@@ -458,7 +473,7 @@ class ScannerApp:
         self.flist.bind("<Button-2>", self.on_flist_rmb)
         self.flist.bind("<Button-3>", self.on_flist_rmb)
         self.file_operation_status = tk.StringVar(value="支持多选  ·  右键文件或文件夹可移到废纸篓")
-        ttk.Label(shell, textvariable=self.file_operation_status, style="Muted.TLabel").grid(row=3, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(shell, textvariable=self.file_operation_status, style="Muted.TLabel").grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         # 启动后台线程与轮询
         self._size_workers = [threading.Thread(target=self._size_worker_loop, daemon=True)
@@ -476,75 +491,50 @@ class ScannerApp:
         self.apply_theme(self.mode)
 
     def apply_theme(self, mode):
-        """根据模式应用统一配色，确保深色/浅色下所有列表文字都清晰可读"""
-        self.mode = mode
-        p = PALETTES[mode]
-        self.root.configure(bg=p["win_bg"])
-        self.style.theme_use("clam")
-        self.style.configure("Treeview",
-                             background=p["tree_bg"], fieldbackground=p["tree_bg"],
-                             foreground=p["tree_fg"], rowheight=29, font=("Helvetica Neue", 12),
-                             borderwidth=0, relief="flat")
-        self.style.map("Treeview",
-                       background=[("selected", p["selected_bg"])],
-                       foreground=[("selected", p["selected_fg"])])
-        self.style.configure("Treeview.Heading",
-                             background=p["heading_bg"], foreground=p["tree_fg"],
-                             relief="flat", font=("Helvetica Neue", 11, "bold"), padding=(8, 8))
-        self.style.configure("TFrame", background=p["win_bg"])
-        self.style.configure("TLabel", background=p["win_bg"], foreground=p["tree_fg"])
-        self.style.configure("TButton", background=p["btn_bg"], foreground=p["tree_fg"])
-        self.style.map("TButton",
-                       background=[("active", p["btn_active"]), ("pressed", p["btn_active"])])
-        self.style.configure("TEntry", fieldbackground=p["tree_bg"], foreground=p["tree_fg"])
-        self.style.configure("TSpinbox", fieldbackground=p["tree_bg"], foreground=p["tree_fg"])
-        self.style.configure("TLabel", font=("Helvetica Neue", 12))
-        self.style.configure("TButton", font=("Helvetica Neue", 12), padding=(12, 7), borderwidth=0)
-        self.style.configure("Small.TButton", padding=(8, 4), width=7)
-        self.style.map("TButton", foreground=[("disabled", p["muted"])])
-        self.style.configure("Card.TFrame", background=p["tree_bg"])
-        self.style.configure("TPanedwindow", background=p["win_bg"])
-        self.style.configure("Sash", sashthickness=8, background=p["win_bg"])
-        self.style.configure("Workspace.TNotebook", background=p["win_bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
-        self.style.configure("Workspace.TNotebook.Tab", font=("Helvetica Neue", 12, "bold"),
-                             padding=(24, 10), background=p["heading_bg"], foreground=p["muted"])
-        self.style.map("Workspace.TNotebook.Tab", padding=[("selected", (24, 10)), ("!selected", (24, 10))], background=[("selected", p["tree_bg"]), ("active", p["btn_active"])],
-                       foreground=[("selected", p["accent"]), ("active", p["tree_fg"])])
-        self.style.configure("ScanPath.TLabel", background=p["tree_bg"], foreground=p["tree_fg"], font=("Helvetica Neue", 13))
-        self.style.configure("Title.TLabel", font=("Helvetica Neue", 18, "bold"))
-        self.style.configure("Muted.TLabel", foreground=p["muted"], font=("Helvetica Neue", 10))
-        self.style.configure("CardMuted.TLabel", background=p["tree_bg"], foreground=p["muted"], font=("Helvetica Neue", 10))
-        self.style.configure("Section.TLabel", background=p["tree_bg"], foreground=p["tree_fg"], font=("Helvetica Neue", 13, "bold"))
-        self.style.configure("Metric.TLabel", background=p["tree_bg"], foreground=p["tree_fg"], font=("Helvetica Neue", 20, "bold"))
-        self.style.configure("Accent.TButton", background=p["accent"], foreground="#ffffff", padding=(12, 7))
-        self.style.map("Accent.TButton", background=[("disabled", p["btn_bg"]), ("pressed", p["accent_active"]), ("active", p["accent_active"])], foreground=[("disabled", p["muted"]), ("!disabled", "#ffffff")])
-        for control in ("TEntry", "TSpinbox"):
-            self.style.configure(control, padding=6, bordercolor=p["border"], lightcolor=p["border"], darkcolor=p["border"], insertcolor=p["tree_fg"])
-        self.style.configure("Card.TCheckbutton", background=p["tree_bg"], foreground=p["tree_fg"], font=("Helvetica Neue", 11))
-        self.style.map("Card.TCheckbutton", background=[("active", p["tree_bg"])], foreground=[("active", p["tree_fg"])])
-        self.style.configure("Disk.Horizontal.TProgressbar", background=p["accent"], troughcolor=p["heading_bg"], borderwidth=0, thickness=6)
-        self.style.configure("TScrollbar", background=p["heading_bg"], troughcolor=p["tree_bg"], borderwidth=0, arrowsize=12)
-        # 每个列表都显式配置标签颜色（标签颜色在所有平台都可靠生效）
-        for t in (self.tree, self.flist, self.res):
-            t.tag_configure("dir",    foreground=p["dir"],     background=p["tree_bg"])
-            t.tag_configure("file",   foreground=p["file"],    background=p["tree_bg"])
-            t.tag_configure("normal", foreground=p["tree_fg"], background=p["tree_bg"])
-            t.tag_configure("up",     foreground=p["up"],      background=p["tree_bg"])
-        if hasattr(self, "appearance_btn"):
-            self.appearance_btn.config(text="外观: 深色" if mode == "dark" else "外观: 浅色")
+        """仅更新展示层，所有业务控件和事件绑定继续使用 ttk。"""
+        apply_modern_theme(self, mode)
+
+    def _sync_results_empty(self):
+        if self.res.get_children():
+            self.results_empty_label.place_forget()
+            return
+        if self._scanning:
+            text = "正在查找大文件…\n扫描期间可切换到文件浏览，或随时取消"
+        else:
+            text = "扫描结果将显示在这里\n选择扫描目录后，点击“扫描大文件”"
+        self.results_empty_label.configure(text=text)
+        self.results_empty_label.place(relx=0.5, rely=0.55, anchor="center")
+
+    def toggle_sidebar(self):
+        if self.sidebar_collapsed:
+            self.workspace.insert(0, self.sidebar, weight=0)
+            self.sidebar_expand_button.pack_forget()
+            self.sidebar_collapsed = False
+            self.root.after_idle(lambda: self.workspace.sashpos(0, self._sidebar_width)
+                                 if not self.sidebar_collapsed else None)
+            self.sidebar_collapse_button.focus_set()
+        else:
+            self._sidebar_width = max(175, self.sidebar.winfo_width())
+            self.workspace.forget(self.sidebar)
+            self.sidebar_expand_button.pack(side="left", before=self.browser_heading, padx=(0, 12))
+            self.sidebar_collapsed = True
+            self.sidebar_expand_button.focus_set()
+        if not save_sidebar_collapsed(self.sidebar_collapsed):
+            self.file_operation_status.set("目录树显示已切换，但未能保存配置；请检查用户配置目录权限")
 
     # ---------- 磁盘信息 ----------
     def refresh_disk(self):
         total, used, free = disk_usage("/")
         if total == 0:
             self.disk_var.set("无法获取磁盘信息")
+            self.disk_overview.set_usage(0)
             return
         pct = used / total * 100
-        self.disk_total_var.set(fmt_size(total))
-        self.disk_used_var.set(fmt_size(used))
-        self.disk_free_var.set(fmt_size(free))
+        self.disk_total_var.set(fmt_size(total).replace("GB", " GB").replace("TB", " TB"))
+        self.disk_used_var.set(fmt_size(used).replace("GB", " GB").replace("TB", " TB"))
+        self.disk_free_var.set(fmt_size(free).replace("GB", " GB").replace("TB", " TB"))
         self.disk_var.set("已使用 %.1f%%" % pct)
-        self.disk_bar["value"] = pct
+        self.disk_overview.set_usage(pct)
 
     # ---------- 目录树 ----------
     def _populate_tree(self):
@@ -632,16 +622,14 @@ class ScannerApp:
         self._reset_size_requests()
         self.current_path = path
         self.path_var.set(path)
-        # 记录上级目录信息：存在且不等于自身时才有“上级目录”跳转入口
-        parent = os.path.dirname(path)
-        self.has_parent = bool(parent and parent != path and os.path.isdir(parent))
-        self.parent_path = parent if self.has_parent else ""
         self.flist.delete(*self.flist.get_children())
         self._file_row_ids = {}
         self._file_item_indexes = {}
         self._file_order = []
         self._size_sort_dirty = False
         self.file_items = []
+        self._file_mtimes = {}
+        self._browser_read_error = None
         try:
             with os.scandir(path) as it:
                 for e in it:
@@ -663,18 +651,26 @@ class ScannerApp:
                                 self.dir_size_pending.add(e.path)
                                 self.size_req_q.put((e.path, self._size_cancel))
                         self.file_items.append((size if is_file else size, is_dir, e.name, e.path, mtime))
+                        self._file_mtimes[e.path] = st.st_mtime_ns
                     except (PermissionError, OSError):
                         continue
         except (PermissionError, OSError) as ex:
             self._reset_size_requests()
             self.file_items.clear()
+            self._file_mtimes.clear()
+            self._browser_read_error = "读取权限异常" if isinstance(ex, PermissionError) else "目录读取异常"
+            self._render_list()
             messagebox.showerror("错误", "无法读取目录:\n%s\n%s" % (path, ex))
             return
         self._render_list()
 
     def _sorted_file_items(self):
-        # 文件/文件夹统一按逻辑字节数排序，未知大小在两个方向下都放末尾。
+        # 文件与文件夹统一排序；时间使用原始时间戳，避免显示到分钟造成精度丢失。
         visible = [item for item in self.file_items if browser_item_type(item) not in self.excluded_file_types]
+        if self.sort_column == "mtime":
+            return sorted(visible, key=lambda item: (
+                item[3] not in self._file_mtimes,
+                -self._file_mtimes.get(item[3], 0) if self.mtime_sort_descending else self._file_mtimes.get(item[3], 0)))
         return sorted(visible, key=lambda item: (
             item[0] < 0, -item[0] if self.size_sort_descending else item[0]))
 
@@ -691,9 +687,23 @@ class ScannerApp:
         visible = sum(browser_item_type(item) not in self.excluded_file_types for item in self.file_items)
         description = "已筛选" if active else "全部展示"
         text = "类型：%s · %d / %d 项" % (description, visible, len(self.file_items))
+        read_error = getattr(self, "_browser_read_error", None)
+        if read_error:
+            text = read_error + " · 当前目录内容不可读取"
         if not visible and self.file_items:
             text += " · 没有符合条件的项目"
         self.filter_summary_var.set(text)
+        if hasattr(self, "browser_empty_label"):
+            if read_error:
+                guidance = "请检查目录访问权限后，点击“刷新列表”重试" if read_error == "读取权限异常" else "请确认目录或磁盘可用后，点击“刷新列表”重试"
+                self.browser_empty_label.configure(text=read_error + "\n" + guidance, style="Error.TLabel")
+                self.browser_empty_label.place(relx=0.5, rely=0.55, anchor="center")
+            elif visible:
+                self.browser_empty_label.place_forget()
+            else:
+                message = "没有符合筛选条件的项目\n调整类型筛选，或点击“全部展示”" if self.file_items else "此目录暂无可显示项目"
+                self.browser_empty_label.configure(text=message, style="Empty.TLabel")
+                self.browser_empty_label.place(relx=0.5, rely=0.55, anchor="center")
 
     def _close_type_filter(self):
         popup = self._type_filter_popup
@@ -701,7 +711,11 @@ class ScannerApp:
         if popup is not None:
             try:
                 popup.grab_release()
+            except tk.TclError:
+                pass
+            try:
                 popup.destroy()
+                self.flist.focus_set()
             except tk.TclError:
                 pass
 
@@ -740,11 +754,13 @@ class ScannerApp:
         self._type_filter_popup = popup
         popup.withdraw()
         popup.transient(self.root)
-        popup.overrideredirect(True)
+        # 交互式筛选使用系统管理的窗口；macOS 无边框窗口关闭后可能残留键盘激活状态。
+        popup.title("筛选类型")
+        popup.protocol("WM_DELETE_WINDOW", self._close_type_filter)
         popup.resizable(False, False)
         palette = PALETTES[self.mode]
         popup.configure(background=palette["border"])
-        panel = ttk.Frame(popup, style="Card.TFrame", padding=14)
+        panel = ttk.Frame(popup, style="Card.TFrame", padding=18)
         panel.pack(fill="both", expand=True, padx=1, pady=1)
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(3, weight=1)
@@ -820,17 +836,31 @@ class ScannerApp:
         popup.focus_set()
         popup.grab_set()
 
-    def _update_size_sort_header(self):
-        arrow = "↓" if self.size_sort_descending else "↑"
-        direction = "降序" if self.size_sort_descending else "升序"
-        self.flist.heading("size", text="大小 " + arrow)
-        self.sort_hint_var.set("按大小%s · 点击表头切换" % direction)
+    def _update_sort_headers(self):
+        descending = self.mtime_sort_descending if self.sort_column == "mtime" else self.size_sort_descending
+        arrow = "↓" if descending else "↑"
+        direction = "降序" if descending else "升序"
+        for column, title in (("size", "大小"), ("mtime", "修改时间")):
+            self.flist.heading(column, text=title + (" " + arrow if self.sort_column == column else ""))
+        field = "修改时间" if self.sort_column == "mtime" else "大小"
+        self.sort_hint_var.set("按%s%s · 点击表头切换" % (field, direction))
 
     def toggle_size_sort(self):
-        self.size_sort_descending = not self.size_sort_descending
-        self._update_size_sort_header()
+        if self.sort_column == "size":
+            self.size_sort_descending = not self.size_sort_descending
+        self.sort_column = "size"
+        self._update_sort_headers()
         self._reorder_file_rows()
         if not save_sort_direction(self.size_sort_descending):
+            self.file_operation_status.set("排序已切换，但未能保存配置；请检查用户配置目录权限")
+
+    def toggle_mtime_sort(self):
+        if self.sort_column == "mtime":
+            self.mtime_sort_descending = not self.mtime_sort_descending
+        self.sort_column = "mtime"
+        self._update_sort_headers()
+        self._reorder_file_rows()
+        if not save_mtime_sort_direction(self.mtime_sort_descending):
             self.file_operation_status.set("排序已切换，但未能保存配置；请检查用户配置目录权限")
 
     def _render_list(self):
@@ -839,8 +869,6 @@ class ScannerApp:
         self._file_item_indexes = {item[3]: index for index, item in enumerate(self.file_items)}
         self._file_order = []
         self._size_sort_dirty = False
-        if getattr(self, "has_parent", False):
-            self.flist.insert("", "end", values=("..", "—", "上级目录", "上一级", self.parent_path), tags=("up",))
         for size, is_dir, name, path, mtime in self._sorted_file_items():
             size_txt = fmt_size(size) if size >= 0 else "计算中…"
             self._file_row_ids[path] = self.flist.insert(
@@ -852,11 +880,34 @@ class ScannerApp:
     def _reorder_file_rows(self):
         order = [item[3] for item in self._sorted_file_items()]
         if order != self._file_order:
-            offset = 1 if getattr(self, "has_parent", False) else 0
-            for index, path in enumerate(order, offset):
+            for index, path in enumerate(order):
                 self.flist.move(self._file_row_ids[path], "", index)
             self._file_order = order
         self._size_sort_dirty = False
+
+    def on_list_select_all(self, event):
+        """非输入状态下，全选当前标签页的列表；输入框保留文字全选。"""
+        table = event.widget
+        if table is not self.flist and table is not self.res:
+            focus = self.root.focus_get()
+            if focus is not None:
+                if focus.winfo_toplevel() is not self.root:
+                    return
+                if focus.winfo_class() in ("Entry", "TEntry", "Spinbox", "TSpinbox", "Text", "TCombobox", "Combobox"):
+                    return
+            tab = self.notebook.select()
+            if tab == str(self.browse_tab):
+                table = self.flist
+            elif tab == str(self.scan_tab):
+                table = self.res
+            else:
+                return
+            table.focus_set()
+        rows = table.get_children()
+        if table is self.flist:
+            rows = tuple(row for row in rows if table.item(row, "values")[0] != "..")
+        table.selection_set(rows)
+        return "break"
 
     def on_flist_dbl(self, event):
         iid = self.flist.identify_row(event.y)
@@ -1091,7 +1142,8 @@ class ScannerApp:
         iid = self._file_row_ids.get(path)
         if iid is not None:
             self.flist.set(iid, "size", fmt_size(size))
-            self._size_sort_dirty = True
+            if self.sort_column == "size":
+                self._size_sort_dirty = True
 
     # ---------- 大文件扫描 ----------
     def start_scan(self):
