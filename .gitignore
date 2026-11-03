@@ -1,0 +1,18 @@
+# macOS 生成的目录元数据
+.DS_Store
+._*
+
+# 本地 Python 虚拟环境和字节码缓存
+/.venv/
+__pycache__/
+*.py[cod]
+
+# PyInstaller / Swift 构建缓存、辅助程序和安装包产物
+/build/
+/dist/
+
+# 本地 CodeGraph 索引和运行日志
+/.codegraph-rust/
+/.codegraph/
+
+# 保留源码、测试、文档，以及包含原生辅助程序编译逻辑的 .spec 配置。
