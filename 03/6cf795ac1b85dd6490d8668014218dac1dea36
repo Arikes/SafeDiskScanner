@@ -1,0 +1,41 @@
+.gitignore
+  s_491bff54928070::t_f48e341d16d92b 1-18
+docs/superpowers/plans/2026-11-03-layout.md
+  s_491bff54928070::t_c8de43f94036ea 1-21
+docs/性能优化说明.txt
+  s_491bff54928070::t_bddff441aa7573 1-12
+tests/native_trash_smoke.py
+  s_491bff54928070::t_8dca529bb7e9e1 1-43
+tests/test_scanner.py
+  s_491bff54928070::t_f7adaed42ec8b6 1-216
+tests/test_sorting.py
+  s_491bff54928070::t_d88628c14c6272 1-124
+tests/test_trash.py
+  s_491bff54928070::t_db5f1f1a7d08a4 1-112
+tests/test_type_filter.py
+  s_491bff54928070::t_5e9f76e1171c79 1-96
+trash_helper.swift
+  s_491bff54928070::t_5ee56e886f18e2 1-28
+大文件扫描器.py
+  s_491bff54928070::t_6819f6764c1bb4 1-1242
+大文件扫描器.spec
+  s_491bff54928070::t_cbd4f222d12ba3 1-61
+大文件扫描器使用说明.md
+  s_491bff54928070::t_1e036e7a5e0be2 1-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "036cf795ac1b85dd6490d8668014218dac1dea36",
+  "prompts": {},
+  "sessions": {
+    "s_491bff54928070": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19fcf-640a-7611-9d96-659676677d73",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "梁凯 <kame.liang@uxin.com>"
+    }
+  }
+}
