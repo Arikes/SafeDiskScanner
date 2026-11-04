@@ -1,0 +1,19 @@
+README.md
+  s_491bff54928070::t_6bce7abd35597a 1-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cfd50da499abee6badde35f05f660ef5422ff0b8",
+  "prompts": {},
+  "sessions": {
+    "s_491bff54928070": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19fcf-640a-7611-9d96-659676677d73",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "梁凯 <kame.liang@uxin.com>"
+    }
+  }
+}
